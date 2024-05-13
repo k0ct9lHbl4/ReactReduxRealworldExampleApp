@@ -64,5 +64,7 @@ deploy:
     - mkdir -p ~/.ssh
     # Даем безопасные права доступа
     - chmod 700 ~/.ssh
-    # Скопируем все, что есть, при помощи команды scp - копирование на удаленный сервер при помощи ssh
-    - scp ./build/* deploy@188.225.32.172:~/realworld
+    # Добавляем SSH_KNOWN_HOSTS
+    - echo "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+    # Скопируем все, что есть в папке build, при помощи команды scp - копирование на удаленный сервер при помощи ssh
+    - scp -r build/* deploy@188.225.32.172:~/realworld/public
