@@ -47,8 +47,9 @@ build:
   # В качестве артефактов берем все, что будет внутри папки build/
   # Артефакты автоматически шарятся между всеми job-ами и stage-ами
   artifacts:
-    path:
-      - build/
+    paths:
+      - build
+    expire_in: 1 week
 
 deploy:
   image: ubuntu:latest
