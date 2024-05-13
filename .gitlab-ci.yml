@@ -52,7 +52,6 @@ build:
     expire_in: 1 week
 
 deploy:
-  image: ubuntu:latest
   stage: deploy
   script:
     - apk --update add openssh-client scp
