@@ -55,7 +55,7 @@ deploy:
   image: ubuntu:latest
   stage: deploy
   script:
-    - apt -qq update && apt upgrade -qqy openssh-client
+    - apk --update add openssh-client scp
     # Проверяем и получаем переменную для ssh агента
     - eval $(ssh-agent -s)
     # Берем ключ, удаляем у него ненужные переводы строк и добавляем в наш агент, чтобы он был доступен
