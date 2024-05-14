@@ -52,10 +52,9 @@ build:
     expire_in: 1 week
 
 deploy:
-  image: node:14.17.0-alpine
   stage: deploy
   script:
-    - apk --update add openssh-client scp
+    - apk --update add openssh-client
     # Проверяем и получаем переменную для ssh агента
     - eval $(ssh-agent -s)
     # Берем ключ, удаляем у него ненужные переводы строк и добавляем в наш агент, чтобы он был доступен
