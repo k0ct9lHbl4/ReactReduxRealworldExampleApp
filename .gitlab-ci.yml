@@ -52,6 +52,7 @@ build:
     expire_in: 1 week
 
 deploy:
+  image: node:14.17.0-alpine
   stage: deploy
   script:
     - apk --update add openssh-client scp
