@@ -1,48 +1,73 @@
----
+# Объявляем stage-ы для pipeline в самом верху. Они выполняются последовательно.
 stages:
   - lint
   - build
   - deploy
 
-image: node:14.17.0-alpine
+# Определить образ для всех job
+# image: node:14.17.0-alpine
 
-cache:
-  key:
-    files:
-      - package-lock.json
-  paths:
+cache: # Определим кэширование
+  key: # Ключ кэширования (им может быть что угодно: название ветки, хеш коммита)
+    files: # Файл или файлы
+      - package-lock.json # Наш lock-файл с зависимостями
+  paths: # Что кешировать
     - .npm/
 
-before_script:
-  - npm ci --cache .npm --prefer-offline
+# Секция для подготовки кэша (можно объявить вверху, а можно в job-ах)
+.default-cache: &default-cache # Якори в yaml
+  before_script: # Перед всеми job-ами
+    - npm install --cache .npm --prefer-offline # Все зависимости ставим в папку .npm и используем версии из кэша
 
-eslint:
+# Job-а для eslint с кэшом
+eslint-with-cache:
+  extends: # Чтобы использовать кэш
+    - .default-cache
+  image: node:14.17.0-alpine # Указываем нужный Docker образ
   stage: lint
   script:
+    - npm install
     - npm run lint
 
-prettier:
+# Job-а для prettier с кэшом
+prettier-with-cache:
+  extends: # Чтобы использовать кэш
+    - .default-cache
+  image: node:14.17.0-alpine
   stage: lint
   script:
+    - npm install
     - npm run check:format
 
 build:
+  extends: # Чтобы использовать кэш
+    - .default-cache
+  image: node:14.17.0-alpine
   stage: build
   script:
+    - npm install
     - npm run build
+  # В качестве артефактов берем все, что будет внутри папки build/
+  # Артефакты автоматически шарятся между всеми job-ами и stage-ами
   artifacts:
     paths:
       - build
     expire_in: 1 week
 
 deploy:
+  image: node:14.17.0-alpine
   stage: deploy
   script:
     - apk --update add openssh-client
+    # Проверяем и получаем переменную для ssh агента
     - eval $(ssh-agent -s)
+    # Берем ключ, удаляем у него ненужные переводы строк и добавляем в наш агент, чтобы он был доступен
     - echo "$SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add -
+    # Создаем директорию для ключа, чтобы ssh не ругался
     - mkdir -p ~/.ssh
+    # Даем безопасные права доступа
     - chmod 700 ~/.ssh
+    # Добавляем SSH_KNOWN_HOSTS
     - echo "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
-    - scp -r build/* $SSH_USER@$SSH_HOST:~/realworld/public
-
+    # Скопируем все, что есть в папке build, при помощи команды scp - копирование на удаленный сервер при помощи ssh
+    - scp -r build/* deploy@188.225.32.172:~/realworld/public
