@@ -1,0 +1,110 @@
+# Объявляем stage-ы для pipeline в самом верху. Они выполняются последовательно.
+stages:
+  - test
+  - build
+  - deploy
+  - review
+
+# Задаем дефолтные настройки для всех stage-ей и всех job
+default:
+  image: node:14.17.0-alpine
+  cache: # Определим кэширование
+    key: # Ключ кэширования (им может быть что угодно: название ветки, хеш коммита)
+      files: # Файл или файлы
+        - package-lock.json # Наш lock-файл с зависимостями
+    paths: # Что кешировать
+      - .npm/
+  before_script:
+    - npm install --cache .npm --prefer-offline # Все зависимости ставим в папку .npm и используем версии из кэша
+
+# Создадим скрытую job-у для настройки SSH доступа
+# Такие job-ы удобно использовать, если мы хотим написать какую-то общую логику,
+# которую хотим потом переиспользовать на других job-ах
+.setup_ssh:
+  before_script:
+    # Если не запущен ssh агент, то его просто ставим
+    # apk - это пакетный менеджер для alpine
+    - "which ssh-agent || (apk add --update openssh curl bash git)"
+    # Запускаем ssh агент, если не был запущен или мы его установили с нуля
+    - eval $(ssh-agent -s)
+    # Берем ключ, удаляем у него ненужные переводы строк и добавляем в наш агент, чтобы он был доступен
+    - echo "$SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add -
+    # Создаем директорию для ключа, чтобы ssh не ругался
+    - mkdir -p ~/.ssh
+    # Даем безопасные права доступа
+    - chmod 700 ~/.ssh
+    # Добавляем SSH_KNOWN_HOSTS
+    - echo "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+lint:
+  stage: test
+  script:
+    - npm run lint
+    - npm run check:format
+
+build:
+  stage: build
+  variables:
+    REACT_APP_BACKEND_URL: http://$CI_COMMIT_REF_SLUG.$APP_HOST/api
+  script:
+    - npm run build
+  # В качестве артефактов берем все, что будет внутри папки build/
+  # Артефакты автоматически шарятся между всеми job-ами и stage-ами
+  artifacts:
+    paths:
+      - build
+    expire_in: 1 week
+
+deploy:
+  extends:
+    - .setup_ssh
+  stage: deploy
+  variables:
+    DEPLOY_DIST: "/home/deploy/app/$CI_COMMIT_REF_SLUG/current/public/"
+  script:
+    # Заходим на сервер и создаем директорию public, если ее нет
+    - ssh $SSH_USER@$SSH_HOST "mkdir -p $DEPLOY_DIST"
+    # С помощью scp копируем все артефакты из предыдущей job-ы в эту созданную директорию
+    - scp -r build/* $SSH_USER@$SSH_HOST:$DEPLOY_DIST
+  rules:
+    - if: $CI_COMMIT_REF_NAME == 'main'
+
+start_review:
+  stage: review
+  extends:
+    - .setup_ssh
+  variables:
+    BRANCH_EXISTS_URL: "https://gitlab.com/api/v4/projects/$BACKEND_PROJECT_ID/repository/branches/$CI_COMMIT_REF_NAME"
+    CREATE_BRANCH_URL: "https://gitlab.com/api/v4/projects/$BACKEND_PROJECT_ID/repository/branches?branch=$CI_COMMIT_REF_NAME&ref=$CI_DEFAULT_BRANCH"
+    TRIGGER_PIPELINE_URL: "https://gitlab.com/api/v4/projects/$BACKEND_PROJECT_ID/pipeline?ref=$CI_COMMIT_REF_NAME"
+  script:
+    - 'status_code=$(curl -I --header "PRIVATE-TOKEN: $PAT_TOKEN" --write-out "%{http_code}" --silent --output /dev/null "$BRANCH_EXISTS_URL")'
+    - '[[ "$status_code" -ne 204 ]] && status_code=$(curl -X POST --header "PRIVATE-TOKEN: $PAT_TOKEN" --write-out "%{http_code}" --silent --output /dev/null "$CREATE_BRANCH_URL")'
+    - '[[ "$status_code" -ne 400 ]] && echo "Branch already exists" && exit 0'
+    - 'curl -X POST --header "PRIVATE-TOKEN: $PAT_TOKEN" --write-out "%{http_code}" --silent --output /dev/null "$TRIGGER_PIPELINE_URL"'
+  environment:
+    name: review/$CI_COMMIT_REF_NAME
+    url: http://$CI_COMMIT_REF_SLUG.$APP_HOST/
+    on_stop: stop_review
+  rules:
+    - if: "$CI_MERGE_REQUEST_TITLE =~ /SKIP REVIEW/"
+      when: never
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+stop_review:
+  stage: review
+  extends:
+    - .setup_ssh
+  environment:
+    name: review/$CI_COMMIT_REF_NAME
+    action: stop
+  variables:
+    DEPLOY_DIST: "/home/deploy/app/$CI_COMMIT_REF_SLUG/current/public"
+  script:
+    - |
+      ssh $SSH_USER@$SSH_HOST "rm -rf $DEPLOY_DIST"
+  rules:
+    - if: "$CI_MERGE_REQUEST_TITLE =~ /SKIP REVIEW/"
+      when: never
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      when: manual
